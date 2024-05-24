@@ -1,53 +1,64 @@
 "use strict";
 
-require("dotenv").config();
+require("dotenv").config({ path: "./.env.local" });
 
-const APIAI_TOKEN = process.env.APIAI_TOKEN;
-const APIAI_SESSION_ID = process.env.APIAI_SESSION_ID;
-
+const http = require("http");
 const express = require("express");
+const { OpenAI } = require("openai");
+const { Server } = require("socket.io");
+
 const app = express();
+const server = http.createServer(app);
 
-app.use(express.static(__dirname + "/views")); // html
-app.use(express.static(__dirname + "/public")); // js, css, images
+const PORT = process.env.PORT || 5000;
 
-const server = app.listen(process.env.PORT || 5000, () => {
-    console.log(
-        "Express server listening on port %d in %s mode",
-        server.address().port,
-        app.settings.env
-    );
+app.use(express.static(__dirname + "/views"));
+app.use(express.static(__dirname + "/public"));
+
+const io = new Server(server, {
+    rejectUnauthorized: app.settings.env !== "development",
+    cors: {
+        origin: `http://localhost:${PORT}`,
+        methods: ["GET", "POST"],
+    },
 });
 
-const io = require("socket.io")(server);
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
+
 io.on("connection", function (socket) {
-    console.log("a user connected");
+    console.log("Socket connected");
 });
 
-const apiai = require("apiai")(APIAI_TOKEN);
-
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
     res.sendFile("index.html");
 });
 
 io.on("connection", function (socket) {
-    socket.on("chat message", (text) => {
+    socket.on("chat message", async (text) => {
         console.log("Message: " + text);
+        try {
+            const completion = await openai.chat.completions.create({
+                messages: [{ role: "system", content: text }],
+                model: "gpt-3.5-turbo",
+            });
+            console.log(completion);
 
-        let apiaiReq = apiai.textRequest(text, {
-            sessionId: APIAI_SESSION_ID,
-        });
-
-        apiaiReq.on("response", (response) => {
-            let aiText = response.result.fulfillment.speech;
+            const aiText = completion.choices[0];
             console.log("Bot reply: " + aiText);
             socket.emit("bot reply", aiText);
-        });
-
-        apiaiReq.on("error", (error) => {
-            console.log(error);
-        });
-
-        apiaiReq.end();
+        } catch (error) {
+            console.warn(error);
+            socket.emit("bot reply", "");
+        }
     });
+});
+
+server.listen(PORT, () => {
+    console.log(
+        "Express server listening on port %d in %s mode",
+        PORT,
+        app.settings.env
+    );
 });
